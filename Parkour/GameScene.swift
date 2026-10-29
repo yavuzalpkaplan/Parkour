@@ -10,12 +10,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let player = SKSpriteNode(color: .systemOrange, size: CGSize(width: 36, height: 36))
     private let progressFill = SKSpriteNode(color: .systemMint, size: .zero)
     private let progressLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+    private struct Platform {
+        let start: CGFloat
+        let end: CGFloat
+        let elevation: CGFloat
+    }
+    private var platforms: [Platform] = []
+    private var runTime: TimeInterval = 0
     private var distance: CGFloat = 0
     private let finishDistance: CGFloat = 16000
     private var lastTime: TimeInterval = 0
     private var jumpRequestedAt: TimeInterval?
     private var isOnGround = true
     private var pendingCollision = false
+    private var hitPlatformWall = false
     private var floorY: CGFloat { size.height * 0.22 }
     private var runnerX: CGFloat { min(120, size.width * 0.27) }
     private var safeTop: CGFloat { view?.safeAreaInsets.top ?? 0 }
@@ -48,6 +56,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         player.physicsBody?.allowsRotation = false
         player.physicsBody?.restitution = 0
         player.physicsBody?.linearDamping = 0
+        player.physicsBody?.friction = 0
         player.physicsBody?.usesPreciseCollisionDetection = true
         player.physicsBody?.categoryBitMask = 1
         player.physicsBody?.collisionBitMask = 2
@@ -104,43 +113,103 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func buildCourse() {
-        let ground = SKSpriteNode(color: SKColor(red: 0.13, green: 0.24, blue: 0.29, alpha: 1), size: CGSize(width: size.width, height: floorY))
-        ground.anchorPoint = .zero
-        ground.physicsBody = SKPhysicsBody(rectangleOf: ground.size, center: CGPoint(x: size.width / 2, y: floorY / 2))
-        ground.physicsBody?.isDynamic = false
-        ground.physicsBody?.categoryBitMask = 2
-        course.addChild(ground)
-        let edge = SKSpriteNode(color: .systemMint, size: CGSize(width: size.width, height: 3))
-        edge.position = CGPoint(x: size.width / 2, y: floorY)
-        course.addChild(edge)
-
-        // Build a repeatable course with harder obstacles in later sections.
-        var worldX: CGFloat = 800
+        platforms.removeAll()
+        // Start with safe ground, then introduce gaps and raised landings.
+        var start: CGFloat = -300
         var index = 0
-        while worldX < finishDistance - 500 {
-            let difficulty = worldX / finishDistance
-            let width: CGFloat = index % 3 == 0 ? 56 : 32
-            let height: CGFloat = 42 + difficulty * 42
-            let obstacle = SKSpriteNode(color: .systemPink, size: CGSize(width: width, height: height))
-            obstacle.name = "obstacle"
-            obstacle.userData = ["worldX": worldX]
-            obstacle.position = CGPoint(x: runnerX + worldX, y: floorY + height / 2)
-            obstacle.physicsBody = SKPhysicsBody(rectangleOf: obstacle.size)
-            obstacle.physicsBody?.isDynamic = false
-            obstacle.physicsBody?.categoryBitMask = 4
-            obstacle.physicsBody?.collisionBitMask = 0
-            course.addChild(obstacle)
-            // Spacing leaves enough time to land and jump again at maximum speed.
-            worldX += 520 - difficulty * 90 + CGFloat(index % 3) * 35
+        while start < finishDistance + 500 {
+            let difficulty = max(0, start / finishDistance)
+            let length: CGFloat = index == 0 ? 1500 : 850 - difficulty * 160
+            let elevation: CGFloat = index < 2 ? 0 : [CGFloat(0), 45, 85, 30][index % 4]
+            let platform = Platform(start: start, end: start + length, elevation: elevation)
+            platforms.append(platform)
+            addPlatform(platform)
+
+            if index == 0 {
+                addSpikes(at: 650, elevation: 0, count: 2)
+            } else {
+                // Keep hazards away from the landing and takeoff edges.
+                let hazardX = start + length * 0.52
+                if index >= 3 && index % 3 == 0 {
+                    addMovingHazard(at: hazardX, elevation: elevation)
+                } else {
+                    addSpikes(at: hazardX, elevation: elevation, count: difficulty > 0.45 ? 3 : 2)
+                }
+            }
+            let gap: CGFloat = index == 0 ? 85 : 95 + difficulty * 45
+            start = platform.end + gap
             index += 1
         }
-        for index in 0...Int(finishDistance / 100) {
+        updateWorld()
+    }
+
+    private func addPlatform(_ platform: Platform) {
+        let width = platform.end - platform.start
+        let depth: CGFloat = floorY + platform.elevation + 180
+        let node = SKSpriteNode(color: SKColor(red: 0.13, green: 0.24, blue: 0.29, alpha: 1), size: CGSize(width: width, height: depth))
+        node.anchorPoint = CGPoint(x: 0, y: 1)
+        node.name = "platform"
+        node.userData = ["worldX": platform.start]
+        node.position.y = floorY + platform.elevation
+        // Match the entire visible platform, including its vertical walls.
+        node.physicsBody = SKPhysicsBody(rectangleOf: node.size, center: CGPoint(x: width / 2, y: -depth / 2))
+        node.physicsBody?.isDynamic = false
+        node.physicsBody?.categoryBitMask = 2
+        node.physicsBody?.friction = 0
+        node.physicsBody?.restitution = 0
+        course.addChild(node)
+        let edge = SKSpriteNode(color: .systemMint, size: CGSize(width: width, height: 4))
+        edge.anchorPoint = CGPoint(x: 0, y: 0.5)
+        node.addChild(edge)
+        for x in stride(from: CGFloat(25), to: width, by: 90) {
             let mark = SKSpriteNode(color: .systemMint.withAlphaComponent(0.2), size: CGSize(width: 25, height: 3))
-            mark.name = "mark"
-            mark.userData = ["worldX": CGFloat(index) * 100]
-            mark.position.y = floorY - 24
-            course.addChild(mark)
+            mark.position = CGPoint(x: x, y: -25)
+            node.addChild(mark)
         }
+    }
+
+    private func addSpikes(at worldX: CGFloat, elevation: CGFloat, count: Int) {
+        for index in 0..<count {
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: -12, y: 0))
+            path.addLine(to: CGPoint(x: 0, y: 38))
+            path.addLine(to: CGPoint(x: 12, y: 0))
+            path.closeSubpath()
+            let spike = SKShapeNode(path: path)
+            spike.fillColor = .systemPink
+            spike.strokeColor = .white.withAlphaComponent(0.65)
+            spike.lineWidth = 1.5
+            spike.name = "obstacle"
+            spike.userData = ["worldX": worldX + CGFloat(index) * 24]
+            spike.position.y = floorY + elevation
+            spike.physicsBody = SKPhysicsBody(polygonFrom: path)
+            spike.physicsBody?.isDynamic = false
+            spike.physicsBody?.categoryBitMask = 4
+            spike.physicsBody?.collisionBitMask = 0
+            course.addChild(spike)
+        }
+    }
+
+    private func addMovingHazard(at worldX: CGFloat, elevation: CGFloat) {
+        let path = CGMutablePath()
+        for index in 0..<24 {
+            let angle = CGFloat(index) * .pi / 12
+            let radius: CGFloat = index.isMultiple(of: 2) ? 25 : 18
+            let point = CGPoint(x: cos(angle) * radius, y: sin(angle) * radius)
+            if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
+        }
+        path.closeSubpath()
+        let saw = SKShapeNode(path: path)
+        saw.fillColor = .systemPink
+        saw.strokeColor = .white
+        saw.lineWidth = 2
+        saw.name = "movingHazard"
+        saw.userData = ["worldX": worldX, "baseY": floorY + elevation + 38]
+        saw.physicsBody = SKPhysicsBody(circleOfRadius: 22)
+        saw.physicsBody?.isDynamic = false
+        saw.physicsBody?.categoryBitMask = 4
+        saw.physicsBody?.collisionBitMask = 0
+        course.addChild(saw)
     }
 
     private func buildHUD() {
@@ -160,9 +229,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func resetPlayer() {
         player.position = CGPoint(x: runnerX, y: floorY + player.size.height / 2)
+        runTime = 0
         player.physicsBody?.velocity = .zero
         player.physicsBody?.isDynamic = false
         pendingCollision = false
+        hitPlatformWall = false
         jumpRequestedAt = nil
         isOnGround = true
     }
@@ -186,9 +257,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         text.fontColor = .black
         text.name = "start"
         if state == .menu {
-            addLabel("MAP · Yakında     SKINS · Yakında", size: 13, y: centerY - 90, to: overlay)
+            addLabel("MAP · Soon     SKINS · Soon", size: 13, y: centerY - 90, to: overlay)
         } else {
-            let menu = addLabel("MENÜYE DÖN", size: 15, y: centerY - 90, to: overlay)
+            let menu = addLabel("MAIN MENU", size: 15, y: centerY - 90, to: overlay)
             menu.name = "menu"
         }
     }
@@ -226,7 +297,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func tryJump() {
-        guard state == .playing, !pendingCollision, let requested = jumpRequestedAt else { return }
+        guard state == .playing, !pendingCollision, !hitPlatformWall, let requested = jumpRequestedAt else { return }
         guard ProcessInfo.processInfo.systemUptime - requested <= 0.18 else {
             jumpRequestedAt = nil
             return
@@ -245,7 +316,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     override func didSimulatePhysics() {
         guard state == .playing, !pendingCollision, let body = player.physicsBody else { return }
-        isOnGround = abs(player.position.y - player.size.height / 2 - floorY) <= 2 && abs(body.velocity.dy) < 5
+        // Let wall collisions resolve without teleporting the player into the platform.
+        if !hitPlatformWall { player.position.x = runnerX }
+        body.velocity.dx = 0
+        let feetY = player.position.y - player.size.height / 2
+        isOnGround = abs(body.velocity.dy) < 8 && platforms.contains { platform in
+            distance + 12 >= platform.start && distance - 12 <= platform.end
+                && abs(feetY - floorY - platform.elevation) <= 3
+        }
         tryJump()
     }
 
@@ -253,20 +331,43 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let delta = lastTime == 0 ? 0 : min(currentTime - lastTime, 1.0 / 30)
         lastTime = currentTime
         guard state == .playing else { return }
-        if pendingCollision {
+        if pendingCollision || player.position.y < -60 {
             endRound(won: false)
             return
         }
-        distance = min(finishDistance, distance + CGFloat(delta) * (200 + 100 * distance / finishDistance))
+        runTime += delta
+        if !hitPlatformWall {
+            let nextDistance = min(finishDistance, distance + CGFloat(delta) * (200 + 100 * distance / finishDistance))
+            let halfWidth = player.size.width / 2
+            let feetY = player.position.y - player.size.height / 2
+            // Stop the world at the wall so it cannot scroll through a falling player.
+            if let wall = platforms.first(where: {
+                $0.start > distance + halfWidth - 1
+                    && $0.start <= nextDistance + halfWidth
+                    && feetY < floorY + $0.elevation - 2
+            }) {
+                distance = wall.start - halfWidth
+                hitPlatformWall = true
+                isOnGround = false
+                jumpRequestedAt = nil
+            } else {
+                distance = nextDistance
+            }
+        }
         updateWorld()
         updateProgress()
         if distance >= finishDistance { endRound(won: true) }
     }
 
     private func updateWorld() {
-        for node in course.children where node.name == "obstacle" || node.name == "mark" {
+        for node in course.children {
             guard let worldX = node.userData?["worldX"] as? CGFloat else { continue }
             node.position.x = runnerX + worldX - distance
+            if node.name == "movingHazard", let baseY = node.userData?["baseY"] as? CGFloat {
+                // A deterministic phase makes retries consistent.
+                node.position.y = baseY + 24 * (1 + sin(CGFloat(runTime) * 2.5))
+                node.zRotation = CGFloat(runTime) * 3
+            }
         }
         for node in scenery.children {
             guard let origin = node.userData?["originX"] as? CGFloat,
@@ -288,6 +389,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         state = won ? .won : .lost
         player.physicsBody?.velocity = .zero
         player.physicsBody?.isDynamic = false
-        showOverlay(title: won ? "TAMAMLANDI!" : "TEKRAR DENE", subtitle: "Twilight Run · %\(Int(distance / finishDistance * 100))", button: "YENİDEN BAŞLA")
+        showOverlay(title: won ? "COMPLETED!" : "TRY AGAIN", subtitle: "Twilight Run · \(Int(distance / finishDistance * 100))%", button: "RESTART")
     }
 }

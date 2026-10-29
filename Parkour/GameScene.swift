@@ -1,7 +1,8 @@
 import SpriteKit
+import UIKit
 
 class GameScene: SKScene, SKPhysicsContactDelegate {
-    private enum State { case menu, skins, playing, lost, won }
+    private enum State { case menu, maps, skins, playing, lost, won }
     private var state: State = .menu
     private let scenery = SKNode()
     private let course = SKNode()
@@ -15,6 +16,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let walletLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
     private var coinNodes: [SKNode] = []
     private var movingHazards: [SKNode] = []
+    private struct CourseObject {
+        let node: SKNode
+        let body: SKPhysicsBody?
+        let minX: CGFloat
+        let maxX: CGFloat
+    }
+    private var courseObjects: [CourseObject] = []
+    private var nearbyCoins: [SKNode] = []
+    private var lastActivationDistance: CGFloat = -.infinity
     private var textureCache: [String: SKTexture] = [:]
     private var displayedPercent = -1
     private var collectedCoins = 0
@@ -28,7 +38,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var platforms: [Platform] = []
     private var runTime: TimeInterval = 0
     private var distance: CGFloat = 0
-    private let finishDistance: CGFloat = 16000
+    private let mapProgress = MapProgress()
+    private var currentMap: ParkourMap { mapProgress.selected }
+    private var finishDistance: CGFloat { currentMap.length }
+    private var themeColor: SKColor { currentMap == .neon ? .cyan : .systemMint }
     private var lastTime: TimeInterval = 0
     // A stronger launch and gravity preserve height while shortening airtime.
     private let jumpSpeed: CGFloat = 880
@@ -37,7 +50,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var isOnGround = true
     private var pendingCollision = false
     private var hitPlatformWall = false
-    private var floorY: CGFloat { size.height * 0.22 }
+    private var floorY: CGFloat { size.height * (currentMap == .neon ? 0.34 : 0.22) }
     private var runnerX: CGFloat { min(120, size.width * 0.27) }
     private var safeTop: CGFloat { view?.safeAreaInsets.top ?? 0 }
     private var barWidth: CGFloat { max(100, size.width - 120) }
@@ -84,6 +97,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         distance = 0
         pendingSkinPurchase = nil
         course.removeAllChildren()
+        courseObjects.removeAll()
+        nearbyCoins.removeAll()
+        // Release map-specific facades when switching maps or rebuilding for rotation.
+        textureCache = textureCache.filter { ["coin", "spike", "saw"].contains($0.key) }
         scenery.removeAllChildren()
         hud.removeAllChildren()
         buildBackground()
@@ -91,29 +108,52 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         buildHUD()
         resetPlayer()
         state = .menu
-        showOverlay(title: "PARKOUR", subtitle: "01 / Twilight Run", button: "START")
+        showOverlay(title: "PARKOUR", subtitle: "\(currentMap.number) / \(currentMap.title)", button: "START")
         state = .menu
     }
 
     private func buildBackground() {
-        backgroundColor = SKColor(red: 0.09, green: 0.12, blue: 0.24, alpha: 1)
+        let neon = currentMap == .neon
+        backgroundColor = neon ? SKColor(red: 0.09, green: 0.04, blue: 0.19, alpha: 1)
+            : SKColor(red: 0.09, green: 0.12, blue: 0.24, alpha: 1)
         let moon = SKShapeNode(circleOfRadius: 34)
-        moon.fillColor = SKColor(red: 1, green: 0.84, blue: 0.65, alpha: 1)
+        moon.fillColor = neon ? .systemPink : SKColor(red: 1, green: 0.84, blue: 0.65, alpha: 1)
         moon.strokeColor = .clear
         moon.position = CGPoint(x: size.width * 0.78, y: size.height * 0.72)
         scenery.addChild(moon)
+        if neon {
+            // Distant stars stay above the low skyline, emphasizing the rooftop height.
+            let stars = CGMutablePath()
+            for index in 0..<35 {
+                let x = CGFloat((index * 79 + 23) % max(1, Int(size.width)))
+                let y = size.height * 0.58 + CGFloat((index * 37) % max(1, Int(size.height * 0.3)))
+                stars.addEllipse(in: CGRect(x: x, y: y, width: 2, height: 2))
+            }
+            let sky = SKShapeNode(path: stars)
+            sky.fillColor = .white.withAlphaComponent(0.4)
+            sky.strokeColor = .clear
+            scenery.addChild(rasterized(sky, key: "stars-\(size.width)-\(size.height)"))
+        }
 
         // Each skyline moves at a different speed to create depth.
         for layer in 0..<2 {
             let spacing: CGFloat = layer == 0 ? 110 : 75
             for index in 0..<Int(size.width / spacing) + 3 {
-                let height = CGFloat(70 + (index * 47 + layer * 29) % 130)
+                let height = CGFloat(70 + (index * 47 + layer * 29) % 130) + (neon ? 100 : 0)
                 let building = SKSpriteNode(color: layer == 0
                     ? SKColor(red: 0.17, green: 0.22, blue: 0.36, alpha: 1)
                     : SKColor(red: 0.12, green: 0.17, blue: 0.28, alpha: 1),
                     size: CGSize(width: spacing - 8, height: height))
+                if neon {
+                    building.color = layer == 0 ? SKColor(red: 0.22, green: 0.10, blue: 0.35, alpha: 1)
+                        : SKColor(red: 0.12, green: 0.07, blue: 0.24, alpha: 1)
+                    let neonEdge = SKSpriteNode(color: layer == 0 ? .systemPink : .cyan,
+                                               size: CGSize(width: spacing - 8, height: 2))
+                    neonEdge.position = CGPoint(x: (spacing - 8) / 2, y: height)
+                    building.addChild(neonEdge)
+                }
                 building.anchorPoint = CGPoint(x: 0, y: 0)
-                building.position = CGPoint(x: CGFloat(index) * spacing, y: floorY)
+                building.position = CGPoint(x: CGFloat(index) * spacing, y: neon ? -70 : floorY)
                 building.name = "layer\(layer)"
                 building.userData = ["originX": CGFloat(index) * spacing,
                                      "span": CGFloat(Int(size.width / spacing) + 3) * spacing]
@@ -137,22 +177,26 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         var index = 0
         while start < finishDistance + 500 {
             let difficulty = max(0, start / finishDistance)
-            var length: CGFloat = index == 0 ? 1500 : 850 - difficulty * 160
+            let rooftopLengths: [CGFloat] = [680, 480, 520, 820, 460, 720]
+            var length: CGFloat = index == 0 ? 1500 : (currentMap == .neon
+                ? rooftopLengths[(index - 1) % rooftopLengths.count] : 850 - difficulty * 160)
             // Keep the finish line on a wide, safe landing instead of inside a gap.
             if start + length >= finishDistance - 400 {
                 length = finishDistance + 600 - start
             }
-            let elevation: CGFloat = index < 2 ? 0 : [CGFloat(0), 45, 85, 30][index % 4]
+            let heights: [CGFloat] = currentMap == .neon ? [0, 55, 130, 65, 160, 90] : [0, 45, 85, 30]
+            let elevation: CGFloat = currentMap == .neon ? (index == 0 ? 0 : heights[(index - 1) % heights.count])
+                : (index < 2 ? 0 : heights[index % heights.count])
             let platform = Platform(start: start, end: start + length, elevation: elevation)
             platforms.append(platform)
             addPlatform(platform)
 
             if index == 0 {
                 addSpikes(at: 650, elevation: 0, count: 2)
-            } else if start + length * 0.52 < finishDistance - 350 {
+            } else if length >= 650 && start + length * 0.52 < finishDistance - 350 {
                 // Keep hazards away from the landing and takeoff edges.
                 let hazardX = start + length * 0.52
-                if index >= 3 && index % 3 == 0 {
+                if index >= 3 && (index % 3 == 0 || currentMap == .neon && index % 2 == 0) {
                     addMovingHazard(at: hazardX, elevation: elevation)
                 } else {
                     addSpikes(at: hazardX, elevation: elevation, count: difficulty > 0.45 ? 3 : 2)
@@ -165,7 +209,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             }
             let rewardX: CGFloat = index == 0 ? 674 : start + length * 0.52 + 20
             addCoin(at: rewardX, y: floorY + elevation + 150)
-            let gap: CGFloat = index == 0 ? 85 : 95 + difficulty * 45
+            let gap: CGFloat = index == 0 ? 85 : (currentMap == .neon
+                ? [CGFloat(100), 120, 100, 140][index % 4] : 95 + difficulty * 45)
             start = platform.end + gap
             index += 1
         }
@@ -176,6 +221,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 node.position.x = runnerX + worldX
             }
         }
+        courseObjects = course.children.map { node in
+            let bounds = node.calculateAccumulatedFrame()
+            return CourseObject(node: node, body: node.physicsBody, minX: bounds.minX, maxX: bounds.maxX)
+        }
+        lastActivationDistance = -.infinity
         updateWorld()
     }
 
@@ -225,15 +275,63 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         node.physicsBody?.categoryBitMask = 2
         node.physicsBody?.friction = 0
         node.physicsBody?.restitution = 0
+        if currentMap == .neon {
+            node.color = SKColor(red: 0.10, green: 0.08, blue: 0.19, alpha: 1)
+            decorateRooftop(node, width: width, depth: depth, elevation: platform.elevation)
+        }
         course.addChild(node)
-        let edge = SKSpriteNode(color: .systemMint, size: CGSize(width: width, height: 4))
+        let edge = SKSpriteNode(color: themeColor, size: CGSize(width: width, height: 4))
         edge.anchorPoint = CGPoint(x: 0, y: 0.5)
         node.addChild(edge)
+        guard currentMap == .twilight else { return }
         for x in stride(from: CGFloat(25), to: width, by: 90) {
             let mark = SKSpriteNode(color: .systemMint.withAlphaComponent(0.2), size: CGSize(width: 25, height: 3))
             mark.position = CGPoint(x: x, y: -25)
             node.addChild(mark)
         }
+    }
+
+    private func decorateRooftop(_ node: SKSpriteNode, width: CGFloat, depth: CGFloat, elevation: CGFloat) {
+        // Bake the opaque facade at game resolution, rather than storing large
+        // Retina textures and blending separate windows, signs, and trim each frame.
+        let key = "roof-\(Int(width))-\(Int(depth))-\(Int(elevation))"
+        if textureCache[key] == nil {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            format.opaque = true
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: width, height: depth), format: format)
+            let image = renderer.image { context in
+                let graphics = context.cgContext
+                graphics.setFillColor(UIColor(red: 0.10, green: 0.08, blue: 0.19, alpha: 1).cgColor)
+                graphics.fill(CGRect(x: 0, y: 0, width: width, height: depth))
+                graphics.setFillColor(UIColor(red: 0.25, green: 0.19, blue: 0.36, alpha: 1).cgColor)
+                graphics.fill(CGRect(x: 0, y: 0, width: width, height: 18))
+                graphics.setFillColor(UIColor.systemPink.withAlphaComponent(0.65).cgColor)
+                graphics.fill(CGRect(x: 0, y: 21, width: width, height: 3))
+                graphics.setFillColor(UIColor.cyan.withAlphaComponent(0.4).cgColor)
+                graphics.fill(CGRect(x: width - 3, y: 0, width: 3, height: depth))
+                for column in 0..<Int(width / 46) {
+                    for row in 0..<Int((depth - 65) / 42) where (column + row * 3) % 5 != 0 {
+                        graphics.fill(CGRect(x: 18 + CGFloat(column) * 46,
+                                             y: 47 + CGFloat(row) * 42, width: 16, height: 23))
+                    }
+                }
+                let title = "KAPLAN GAMES" as NSString
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: UIFont(name: "AvenirNext-Bold", size: 16) ?? UIFont.boldSystemFont(ofSize: 16),
+                    .foregroundColor: UIColor.systemPink
+                ]
+                // Align the full text to the right with space before the building edge.
+                let titleWidth = title.size(withAttributes: attributes).width
+                title.draw(at: CGPoint(x: width - titleWidth - 20, y: 29), withAttributes: attributes)
+            }
+            let texture = SKTexture(image: image)
+            texture.filteringMode = .linear
+            textureCache[key] = texture
+        }
+        node.texture = textureCache[key]
+        node.colorBlendFactor = 0
+        node.blendMode = .replace
     }
 
     private func addSpikes(at worldX: CGFloat, elevation: CGFloat, count: Int) {
@@ -333,7 +431,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func collectNearbyCoins() {
         var earned = 0
-        for coin in coinNodes where !coin.isHidden {
+        for coin in nearbyCoins where !coin.isHidden {
             let position = course.convert(coin.position, to: self)
             guard abs(position.x - player.position.x) < 32 else { continue }
             // Circle-versus-rectangle overlap avoids collecting from the corners of a large box.
@@ -390,6 +488,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func resetPlayer() {
         player.position = CGPoint(x: runnerX, y: floorY + player.size.height / 2)
         runTime = 0
+        lastActivationDistance = -.infinity
         lastTime = 0
         resetCoins()
         player.physicsBody?.velocity = .zero
@@ -433,11 +532,48 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let label = addLabel("SKINS", size: 16, y: -6, to: skinsButton)
             label.position.x = 0
             label.name = "skins"
-            addLabel("MAP · Soon", size: 13, y: centerY - 140, to: overlay)
+            let mapsButton = SKShapeNode(rectOf: CGSize(width: 210, height: 40), cornerRadius: 12)
+            mapsButton.name = "maps"
+            mapsButton.fillColor = .white.withAlphaComponent(0.12)
+            mapsButton.strokeColor = .clear
+            mapsButton.position = CGPoint(x: size.width / 2, y: centerY - 140)
+            overlay.addChild(mapsButton)
+            let mapLabel = addLabel("MAPS", size: 16, y: -6, to: mapsButton)
+            mapLabel.position.x = 0
         } else {
             let menu = addLabel("MAIN MENU", size: 15, y: centerY - 90, to: overlay)
             menu.name = "menu"
         }
+    }
+
+    private func showMaps() {
+        state = .maps
+        overlay.removeAllChildren()
+        hud.isHidden = true
+        let shade = SKSpriteNode(color: .black.withAlphaComponent(0.85), size: size)
+        shade.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        overlay.addChild(shade)
+        let top = size.height - safeTop - 60
+        addLabel("MAPS", size: 28, y: top, to: overlay)
+        let spacing = min(140, (top - 80) / 2)
+        for (index, map) in ParkourMap.allCases.enumerated() {
+            let card = SKShapeNode(rectOf: CGSize(width: min(350, size.width - 40), height: spacing - 12), cornerRadius: 18)
+            card.name = "map:\(map.rawValue)"
+            card.position = CGPoint(x: size.width / 2, y: top - 20 - spacing * (CGFloat(index) + 0.5))
+            card.fillColor = map == .neon ? SKColor(red: 0.20, green: 0.07, blue: 0.30, alpha: 1)
+                : SKColor(red: 0.09, green: 0.18, blue: 0.26, alpha: 1)
+            card.strokeColor = currentMap == map ? .systemMint : .white.withAlphaComponent(0.15)
+            overlay.addChild(card)
+            let title = addLabel("\(map.number) / \(map.title)", size: 20, y: 20, to: card)
+            title.position.x = 0
+            let detail = addLabel(map.description, size: 11, y: 0, to: card)
+            detail.position.x = 0
+            let status = addLabel("BEST \(mapProgress.best(for: map))% · \(currentMap == map ? "SELECTED" : "SELECT")", size: 13, y: -25, to: card)
+            status.position.x = 0
+            status.fontColor = .systemMint
+        }
+        let back = addLabel("MAIN MENU", size: 16, y: 35, to: overlay)
+        back.name = "menu"
     }
 
     private func skinColor(_ skin: RunnerSkin) -> SKColor {
@@ -580,7 +716,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 }
                 return
             }
-            if names.contains("skins") {
+            if state == .maps, let name = names.first(where: { $0.hasPrefix("map:") }),
+               let map = ParkourMap(rawValue: String(name.dropFirst(4))) {
+                mapProgress.select(map)
+                rebuild()
+                return
+            }
+            if names.contains("maps") {
+                showMaps()
+            } else if names.contains("skins") {
                 showSkins()
             } else if names.contains("menu") {
                 state = .menu
@@ -670,7 +814,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func updateWorld() {
         course.position.x = -distance
-        for node in movingHazards {
+        updateActiveObjects()
+        for node in movingHazards where !node.isHidden {
             if let baseY = node.userData?["baseY"] as? CGFloat {
                 node.position.y = baseY + 24 * (1 + sin(CGFloat(runTime) * 2.5))
                 node.zRotation = CGFloat(runTime) * 3
@@ -686,6 +831,27 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
+    private func updateActiveObjects() {
+        // Recheck in small distance chunks, with generous margins to avoid visible pop-in.
+        guard abs(distance - lastActivationDistance) >= 64 else { return }
+        lastActivationDistance = distance
+        let left = distance - 200
+        let right = distance + size.width + 256
+        for object in courseObjects {
+            let active = object.maxX >= left && object.minX <= right
+            // Coin visibility records collection, so leave it untouched here.
+            if object.node.name != "coin" { object.node.isHidden = !active }
+            if active {
+                if object.node.physicsBody == nil, let body = object.body {
+                    object.node.physicsBody = body
+                }
+            } else if object.node.physicsBody != nil {
+                object.node.physicsBody = nil
+            }
+        }
+        nearbyCoins = coinNodes.filter { abs($0.position.x - runnerX - distance) < 200 }
+    }
+
     private func updateProgress() {
         let progress = min(1, distance / finishDistance)
         progressFill.size = CGSize(width: barWidth * progress, height: 6)
@@ -697,6 +863,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func endRound(won: Bool) {
+        mapProgress.record(won ? 100 : Int(min(1, distance / finishDistance) * 100), for: currentMap)
         state = won ? .won : .lost
         player.physicsBody?.velocity = .zero
         player.physicsBody?.isDynamic = false

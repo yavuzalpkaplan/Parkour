@@ -45,7 +45,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let mapProgress = MapProgress()
     private var currentMap: ParkourMap { mapProgress.selected }
     private var finishDistance: CGFloat { currentMap.length }
-    private var themeColor: SKColor { currentMap == .neon ? .cyan : .systemMint }
+    private var themeColor: SKColor { currentMap == .jungle ? .systemGreen : currentMap == .neon ? .cyan : .systemMint }
     private var lastTime: TimeInterval = 0
     // A stronger launch and gravity preserve height while shortening airtime.
     private let jumpSpeed: CGFloat = 880
@@ -77,6 +77,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         player.zPosition = 5
         configurePlayer()
         rebuild()
+    }
+
+    func resumeAfterInterruption() {
+        // Do not apply background time or stale taps to the next gameplay frame.
+        lastTime = 0
+        jumpRequestedAt = nil
+        isPaused = false
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -116,11 +123,15 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         buildHUD()
         resetPlayer()
         state = .menu
-        showOverlay(title: "PARKOUR", subtitle: "\(currentMap.number) / \(currentMap.title)", button: "START")
+        showOverlay(title: "THE CUBE", subtitle: "\(currentMap.number) / \(currentMap.title)", button: "START")
         state = .menu
     }
 
     private func buildBackground() {
+        if currentMap == .jungle {
+            buildJungleBackground()
+            return
+        }
         let neon = currentMap == .neon
         backgroundColor = neon ? SKColor(red: 0.09, green: 0.04, blue: 0.19, alpha: 1)
             : SKColor(red: 0.09, green: 0.12, blue: 0.24, alpha: 1)
@@ -175,6 +186,114 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
     }
 
+    private func buildJungleBackground() {
+        backgroundColor = SKColor(red: 0.035, green: 0.12, blue: 0.13, alpha: 1)
+        let tileWidth: CGFloat = 240
+        let tileHeight = max(440, size.height * 0.9)
+        let count = Int(ceil(size.width / tileWidth)) + 2
+        for layer in 0..<2 {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            let texture = SKTexture(image: UIGraphicsImageRenderer(size: CGSize(width: tileWidth, height: tileHeight), format: format).image { context in
+                let g = context.cgContext
+                let trunk = layer == 0 ? UIColor(red: 0.07, green: 0.23, blue: 0.23, alpha: 1)
+                    : UIColor(red: 0.04, green: 0.16, blue: 0.13, alpha: 1)
+                let leaves = layer == 0 ? UIColor(red: 0.08, green: 0.29, blue: 0.26, alpha: 1)
+                    : UIColor(red: 0.05, green: 0.23, blue: 0.15, alpha: 1)
+                // Repeat edge trees inside the texture so adjacent tiles join seamlessly.
+                for index in -1..<4 {
+                    let patternIndex = (index + 3) % 3
+                    let x = CGFloat(index) * 80 + (layer == 0 ? 8 : 35)
+                    let crownY = CGFloat(35 + patternIndex * 47)
+                    g.setFillColor(trunk.cgColor)
+                    g.fill(CGRect(x: x + 22, y: crownY, width: 17 + CGFloat(patternIndex * 3), height: tileHeight))
+                    g.setStrokeColor(trunk.cgColor)
+                    g.setLineWidth(9)
+                    g.move(to: CGPoint(x: x + 30, y: crownY + 210))
+                    g.addLine(to: CGPoint(x: x - 15, y: crownY + 155))
+                    g.move(to: CGPoint(x: x + 30, y: crownY + 140))
+                    g.addLine(to: CGPoint(x: x + 72, y: crownY + 100))
+                    g.strokePath()
+                    g.setFillColor(leaves.cgColor)
+                    for crown in 0..<3 {
+                        g.fillEllipse(in: CGRect(x: x - 40 + CGFloat(crown) * 28,
+                                                 y: crownY + CGFloat(crown % 2) * 30, width: 115, height: 100))
+                    }
+                    // Thin hanging vines add a forest silhouette without extra scene nodes.
+                    g.setStrokeColor(leaves.cgColor)
+                    g.setLineWidth(2)
+                    g.move(to: CGPoint(x: x + 5, y: crownY + 70))
+                    g.addQuadCurve(to: CGPoint(x: x + 2, y: crownY + 255), control: CGPoint(x: x - 22, y: crownY + 180))
+                    g.strokePath()
+                }
+            })
+            for index in 0..<count {
+                let trees = SKSpriteNode(texture: texture, size: CGSize(width: tileWidth, height: tileHeight))
+                trees.anchorPoint = .zero
+                trees.position = CGPoint(x: CGFloat(index) * tileWidth, y: -40)
+                trees.name = "layer\(layer)"
+                trees.userData = ["originX": CGFloat(index) * tileWidth, "span": CGFloat(count) * tileWidth]
+                scenery.addChild(trees)
+            }
+        }
+        // A small, fixed particle budget keeps rain behind gameplay and away from the HUD.
+        let rainFormat = UIGraphicsImageRendererFormat()
+        rainFormat.scale = 1
+        let drop = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 16), format: rainFormat).image { context in
+            UIColor(red: 0.62, green: 0.84, blue: 0.90, alpha: 0.5).setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 2, height: 16))
+        }
+        let rain = SKEmitterNode()
+        rain.particleTexture = SKTexture(image: drop)
+        rain.particleBirthRate = 65
+        rain.particleLifetime = 2.2
+        rain.particleLifetimeRange = 0.3
+        rain.particlePositionRange = CGVector(dx: size.width + 160, dy: 0)
+        rain.position = CGPoint(x: size.width / 2 + 50, y: size.height + 20)
+        rain.emissionAngle = -.pi / 2 - 0.15
+        rain.particleSpeed = 500
+        rain.particleSpeedRange = 80
+        rain.particleRotation = -0.15
+        rain.particleAlpha = 0.45
+        rain.particleAlphaSpeed = -0.08
+        rain.particleScale = 0.7
+        rain.particleScaleRange = 0.3
+        rain.particleColorBlendFactor = 0
+        rain.zPosition = 5
+        scenery.addChild(rain)
+        rain.advanceSimulationTime(1)
+    }
+
+    private func decorateJunglePlatform(_ node: SKSpriteNode, width: CGFloat, depth: CGFloat) {
+        let key = "earth-\(Int(width))-\(Int(depth))"
+        if textureCache[key] == nil {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            format.opaque = true
+            let image = UIGraphicsImageRenderer(size: CGSize(width: width, height: depth), format: format).image { context in
+                let g = context.cgContext
+                g.setFillColor(UIColor(red: 0.16, green: 0.13, blue: 0.09, alpha: 1).cgColor)
+                g.fill(CGRect(x: 0, y: 0, width: width, height: depth))
+                g.setFillColor(UIColor(red: 0.16, green: 0.37, blue: 0.12, alpha: 1).cgColor)
+                g.fill(CGRect(x: 0, y: 0, width: width, height: 17))
+                g.setStrokeColor(UIColor(red: 0.24, green: 0.21, blue: 0.12, alpha: 1).cgColor)
+                g.setLineWidth(3)
+                for x in stride(from: CGFloat(20), to: width, by: 65) {
+                    g.move(to: CGPoint(x: x, y: 16))
+                    g.addLine(to: CGPoint(x: x + 12, y: 60))
+                    g.addLine(to: CGPoint(x: x - 6, y: 100))
+                    g.strokePath()
+                    g.setFillColor(UIColor(red: 0.24, green: 0.25, blue: 0.20, alpha: 1).cgColor)
+                    g.fillEllipse(in: CGRect(x: x + 10, y: 130, width: 25, height: 12))
+                }
+            }
+            textureCache[key] = SKTexture(image: image)
+        }
+        node.texture = textureCache[key]
+        node.colorBlendFactor = 0
+        node.blendMode = .replace
+    }
+
     private func buildCourse() {
         platforms.removeAll()
         totalCoins = 0
@@ -185,15 +304,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         var index = 0
         while start < finishDistance + 500 {
             let difficulty = max(0, start / finishDistance)
-            let rooftopLengths: [CGFloat] = [680, 480, 520, 820, 460, 720]
-            var length: CGFloat = index == 0 ? 1500 : (currentMap == .neon
+            let rooftopLengths: [CGFloat] = currentMap == .jungle
+                ? [600, 440, 520, 740, 460, 680, 420] : [680, 480, 520, 820, 460, 720]
+            var length: CGFloat = index == 0 ? 1500 : (currentMap != .twilight
                 ? rooftopLengths[(index - 1) % rooftopLengths.count] : 850 - difficulty * 160)
             // Keep the finish line on a wide, safe landing instead of inside a gap.
             if start + length >= finishDistance - 400 {
                 length = finishDistance + 600 - start
             }
-            let heights: [CGFloat] = currentMap == .neon ? [0, 55, 130, 65, 160, 90] : [0, 45, 85, 30]
-            let elevation: CGFloat = currentMap == .neon ? (index == 0 ? 0 : heights[(index - 1) % heights.count])
+            let heights: [CGFloat] = currentMap == .jungle ? [0, 60, 135, 55, 150, 85, 30]
+                : currentMap == .neon ? [0, 55, 130, 65, 160, 90] : [0, 45, 85, 30]
+            let elevation: CGFloat = currentMap != .twilight ? (index == 0 ? 0 : heights[(index - 1) % heights.count])
                 : (index < 2 ? 0 : heights[index % heights.count])
             let platform = Platform(start: start, end: start + length, elevation: elevation)
             platforms.append(platform)
@@ -204,7 +325,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             } else if length >= 650 && start + length * 0.52 < finishDistance - 350 {
                 // Keep hazards away from the landing and takeoff edges.
                 let hazardX = start + length * 0.52
-                if index >= 3 && (index % 3 == 0 || currentMap == .neon && index % 2 == 0) {
+                if index >= 3 && (index % 3 == 0 || currentMap != .twilight && index % 2 == 0) {
                     addMovingHazard(at: hazardX, elevation: elevation)
                 } else {
                     addSpikes(at: hazardX, elevation: elevation, count: difficulty > 0.45 ? 3 : 2)
@@ -217,8 +338,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             }
             let rewardX: CGFloat = index == 0 ? 674 : start + length * 0.52 + 20
             addCoin(at: rewardX, y: floorY + elevation + 150)
-            let gap: CGFloat = index == 0 ? 85 : (currentMap == .neon
-                ? [CGFloat(100), 120, 100, 140][index % 4] : 95 + difficulty * 45)
+            let gap: CGFloat = index == 0 ? 85 : (currentMap == .jungle
+                ? [CGFloat(120), 145, 130, 155, 110][index % 5]
+                : currentMap == .neon ? [CGFloat(100), 120, 100, 140][index % 4] : 95 + difficulty * 45)
             start = platform.end + gap
             index += 1
         }
@@ -287,6 +409,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             node.color = SKColor(red: 0.10, green: 0.08, blue: 0.19, alpha: 1)
             decorateRooftop(node, width: width, depth: depth, elevation: platform.elevation)
         }
+        if currentMap == .jungle { decorateJunglePlatform(node, width: width, depth: depth) }
         course.addChild(node)
         let edge = SKSpriteNode(color: themeColor, size: CGSize(width: width, height: 4))
         edge.anchorPoint = CGPoint(x: 0, y: 0.5)
@@ -350,10 +473,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             path.addLine(to: CGPoint(x: 12, y: 0))
             path.closeSubpath()
             let shape = SKShapeNode(path: path)
-            shape.fillColor = .systemPink
+            shape.fillColor = currentMap == .jungle ? .systemOrange : .systemPink
             shape.strokeColor = .white.withAlphaComponent(0.65)
             shape.lineWidth = 1.5
-            let spike = rasterized(shape, key: "spike")
+            let spike = rasterized(shape, key: currentMap == .jungle ? "jungle-spike" : "spike")
             spike.name = "obstacle"
             spike.userData = ["worldX": worldX + CGFloat(index) * 24]
             spike.position.y = floorY + elevation
@@ -375,10 +498,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         }
         path.closeSubpath()
         let shape = SKShapeNode(path: path)
-        shape.fillColor = .systemPink
+        shape.fillColor = currentMap == .jungle ? .systemGreen : .systemPink
         shape.strokeColor = .white
         shape.lineWidth = 2
-        let saw = rasterized(shape, key: "saw")
+        let saw = rasterized(shape, key: currentMap == .jungle ? "jungle-saw" : "saw")
         saw.name = "movingHazard"
         saw.userData = ["worldX": worldX, "baseY": floorY + elevation + 38]
         saw.physicsBody = SKPhysicsBody(circleOfRadius: 22)
@@ -719,12 +842,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         overlay.addChild(shade)
         let top = size.height - safeTop - 60
         addLabel("MAPS", size: 28, y: top, to: overlay)
-        let spacing = min(140, (top - 80) / 2)
+        let spacing = min(140, (top - 80) / CGFloat(ParkourMap.allCases.count))
         for (index, map) in ParkourMap.allCases.enumerated() {
             let card = SKShapeNode(rectOf: CGSize(width: min(350, size.width - 40), height: spacing - 12), cornerRadius: 18)
             card.name = "map:\(map.rawValue)"
             card.position = CGPoint(x: size.width / 2, y: top - 20 - spacing * (CGFloat(index) + 0.5))
-            card.fillColor = map == .neon ? SKColor(red: 0.20, green: 0.07, blue: 0.30, alpha: 1)
+            card.fillColor = map == .jungle ? SKColor(red: 0.05, green: 0.20, blue: 0.12, alpha: 1) : map == .neon ? SKColor(red: 0.20, green: 0.07, blue: 0.30, alpha: 1)
                 : SKColor(red: 0.09, green: 0.18, blue: 0.26, alpha: 1)
             card.strokeColor = currentMap == map ? .systemMint : .white.withAlphaComponent(0.15)
             overlay.addChild(card)

@@ -138,6 +138,7 @@
 				DEVELOPMENT_TEAM = 98P7BUP9NC;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Parkour/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "The Cube";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UIStatusBarHidden = YES;
@@ -170,6 +171,7 @@
 				DEVELOPMENT_TEAM = 98P7BUP9NC;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Parkour/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "The Cube";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UIStatusBarHidden = YES;

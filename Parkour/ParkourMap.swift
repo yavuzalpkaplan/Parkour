@@ -1,13 +1,35 @@
 import Foundation
 
 enum ParkourMap: String, CaseIterable {
-    case twilight, neon
+    case twilight, neon, jungle
 
-    var title: String { self == .twilight ? "Twilight Run" : "Neon Rooftops" }
-    var number: String { self == .twilight ? "01" : "02" }
-    var length: CGFloat { self == .twilight ? 16000 : 19000 }
+    var title: String {
+        switch self {
+        case .twilight: return "Twilight Run"
+        case .neon: return "Neon Rooftops"
+        case .jungle: return "Jungle Rush"
+        }
+    }
+    var number: String {
+        switch self {
+        case .twilight: return "01"
+        case .neon: return "02"
+        case .jungle: return "03"
+        }
+    }
+    var length: CGFloat {
+        switch self {
+        case .twilight: return 16000
+        case .neon: return 19000
+        case .jungle: return 21000
+        }
+    }
     var description: String {
-        self == .twilight ? "Learn the rhythm · Long platforms" : "Climb the skyline · Short rooftop chains"
+        switch self {
+        case .twilight: return "Learn the rhythm · Long platforms"
+        case .neon: return "Climb the skyline · Short rooftop chains"
+        case .jungle: return "Brave the rain · Wild forest jumps"
+        }
     }
 }
 

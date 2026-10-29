@@ -1,7 +1,7 @@
 import Foundation
 
 enum AchievementID: String, CaseIterable {
-    case coinCollector, coinRun, newLook, twilightRunner, neonMaster
+    case coinCollector, coinRun, newLook, twilightRunner, neonMaster, jungleRunner
 
     var title: String {
         switch self {
@@ -10,6 +10,7 @@ enum AchievementID: String, CaseIterable {
         case .newLook: return "New Look"
         case .twilightRunner: return "Twilight Runner"
         case .neonMaster: return "Neon Master"
+        case .jungleRunner: return "Jungle Runner"
         }
     }
 
@@ -18,7 +19,7 @@ enum AchievementID: String, CaseIterable {
         case .coinCollector: return [100, 1000, 10000]
         case .coinRun: return [30, 60, 100]
         case .newLook: return [1, 2, 4]
-        case .twilightRunner, .neonMaster: return [1]
+        case .twilightRunner, .neonMaster, .jungleRunner: return [1]
         }
     }
 
@@ -30,6 +31,7 @@ enum AchievementID: String, CaseIterable {
         case .newLook: return "Buy \(amount) \(target == 1 ? "skin" : "skins")"
         case .twilightRunner: return "Complete Twilight Run"
         case .neonMaster: return "Complete Neon Rooftops"
+        case .jungleRunner: return "Complete Jungle Rush"
         }
     }
 }
@@ -70,6 +72,7 @@ final class AchievementStore {
         case .newLook: return RunnerSkin.allCases.filter { $0.price > 0 && skins.owns($0) }.count
         case .twilightRunner: return maps.best(for: .twilight) == 100 ? 1 : 0
         case .neonMaster: return maps.best(for: .neon) == 100 ? 1 : 0
+        case .jungleRunner: return maps.best(for: .jungle) == 100 ? 1 : 0
         }
     }
 

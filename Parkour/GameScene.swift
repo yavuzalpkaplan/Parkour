@@ -2,7 +2,7 @@ import SpriteKit
 import UIKit
 
 class GameScene: SKScene, SKPhysicsContactDelegate {
-    private enum State { case menu, maps, skins, achievements, playing, lost, won }
+    private enum State { case menu, maps, skins, achievements, settings, playing, lost, won }
     private var state: State = .menu
     private let scenery = SKNode()
     private let course = SKNode()
@@ -16,6 +16,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let notifications = SKNode()
     private var achievementQueue: [AchievementUnlock] = []
     private var showingAchievement = false
+    private var volumeTouch: UITouch?
+    private var volumeSliderFrame = CGRect.zero
+    private var volumeFill: SKSpriteNode?
+    private var volumeThumb: SKShapeNode?
+    private var volumeLabel: SKLabelNode?
     private var pendingSkinPurchase: RunnerSkin?
     private let walletLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
     private var coinNodes: [SKNode] = []
@@ -80,6 +85,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     func resumeAfterInterruption() {
+        volumeTouch = nil
         // Do not apply background time or stale taps to the next gameplay frame.
         lastTime = 0
         jumpRequestedAt = nil
@@ -109,6 +115,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func rebuild() {
+        if volumeTouch != nil { MusicController.shared.setVolume(MusicController.shared.volume) }
+        volumeTouch = nil
         distance = 0
         pendingSkinPurchase = nil
         course.removeAllChildren()
@@ -632,6 +640,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func showOverlay(title: String, subtitle: String, button: String) {
+        MusicController.shared.play(.init(map: currentMap))
         overlay.removeAllChildren()
         hud.isHidden = true
         let shade = SKSpriteNode(color: .black.withAlphaComponent(0.55), size: size)
@@ -681,10 +690,149 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                                                 y: (view?.safeAreaInsets.bottom ?? 0) + 48)
             overlay.addChild(achievementButton)
             achievementButton.addChild(achievementMedal())
+            let settingsButton = SKShapeNode(circleOfRadius: 28)
+            settingsButton.name = "settings"
+            settingsButton.isAccessibilityElement = true
+            settingsButton.accessibilityLabel = "Settings"
+            settingsButton.accessibilityTraits = .button
+            settingsButton.fillColor = SKColor(red: 0.12, green: 0.17, blue: 0.25, alpha: 1)
+            settingsButton.strokeColor = .white.withAlphaComponent(0.4)
+            settingsButton.lineWidth = 1.5
+            settingsButton.position = CGPoint(x: (view?.safeAreaInsets.left ?? 0) + 48,
+                                             y: (view?.safeAreaInsets.bottom ?? 0) + 48)
+            overlay.addChild(settingsButton)
+            settingsButton.addChild(settingsGear())
         } else {
             let menu = addLabel("MAIN MENU", size: 15, y: centerY - 90, to: overlay)
             menu.name = "menu"
         }
+    }
+
+    private func settingsGear() -> SKNode {
+        let icon = SKNode()
+        icon.zPosition = 1
+        let path = CGMutablePath()
+        for point in 0..<40 {
+            let angle = CGFloat(point) * .pi / 20
+            let radius: CGFloat = (point / 2).isMultiple(of: 2) ? 15 : 12
+            let position = CGPoint(x: cos(angle) * radius, y: sin(angle) * radius)
+            if point == 0 { path.move(to: position) } else { path.addLine(to: position) }
+        }
+        path.closeSubpath()
+        let gear = SKShapeNode(path: path)
+        gear.fillColor = SKColor(white: 0.88, alpha: 1)
+        gear.strokeColor = .clear
+        icon.addChild(gear)
+        let center = SKShapeNode(circleOfRadius: 5.5)
+        center.fillColor = SKColor(red: 0.12, green: 0.17, blue: 0.25, alpha: 1)
+        center.strokeColor = .clear
+        center.zPosition = 1
+        icon.addChild(center)
+        return icon
+    }
+
+    private func showSettings() {
+        state = .settings
+        volumeTouch = nil
+        overlay.removeAllChildren()
+        hud.isHidden = true
+        let shade = SKSpriteNode(color: .black.withAlphaComponent(0.85), size: size)
+        shade.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        overlay.addChild(shade)
+        addLabel("SETTINGS", size: 28, y: size.height - safeTop - 65, to: overlay)
+        let width = min(330, size.width - 48)
+        let panel = SKShapeNode(rectOf: CGSize(width: width, height: 190), cornerRadius: 18)
+        panel.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        panel.fillColor = .white.withAlphaComponent(0.08)
+        panel.strokeColor = .white.withAlphaComponent(0.12)
+        overlay.addChild(panel)
+        let row = SKNode()
+        row.position.y = 50
+        row.name = "toggleMusic"
+        row.zPosition = 1
+        panel.addChild(row)
+        let hitArea = SKSpriteNode(color: .white.withAlphaComponent(0.001), size: CGSize(width: width - 24, height: 64))
+        row.addChild(hitArea)
+        let label = addLabel("Music", size: 22, y: -7, to: row)
+        label.horizontalAlignmentMode = .left
+        label.position.x = -width / 2 + 24
+        label.zPosition = 1
+        let enabled = MusicController.shared.isEnabled
+        let toggle = SKShapeNode(rectOf: CGSize(width: 88, height: 40), cornerRadius: 20)
+        toggle.position.x = width / 2 - 65
+        toggle.fillColor = enabled ? .systemMint : .darkGray
+        toggle.strokeColor = .clear
+        toggle.zPosition = 1
+        row.addChild(toggle)
+        let status = addLabel(enabled ? "ON" : "OFF", size: 15, y: -5, to: toggle)
+        status.position.x = 0
+        status.fontColor = enabled ? .black : .white
+        status.zPosition = 1
+
+        let volumeTitle = addLabel("Volume", size: 16, y: -16, to: panel)
+        volumeTitle.horizontalAlignmentMode = .left
+        volumeTitle.position.x = -width / 2 + 24
+        volumeTitle.zPosition = 1
+        let percent = addLabel("", size: 15, y: -16, to: panel)
+        percent.horizontalAlignmentMode = .right
+        percent.position.x = width / 2 - 24
+        percent.zPosition = 1
+        volumeLabel = percent
+        let sliderWidth = width - 48
+        let track = SKSpriteNode(color: .white.withAlphaComponent(0.18), size: CGSize(width: sliderWidth, height: 6))
+        track.position.y = -55
+        track.zPosition = 1
+        panel.addChild(track)
+        let fill = SKSpriteNode(color: .systemMint, size: CGSize(width: 0, height: 6))
+        fill.anchorPoint = CGPoint(x: 0, y: 0.5)
+        fill.position = CGPoint(x: -sliderWidth / 2, y: -55)
+        fill.zPosition = 2
+        panel.addChild(fill)
+        volumeFill = fill
+        let thumb = SKShapeNode(circleOfRadius: 11)
+        thumb.fillColor = .white
+        thumb.strokeColor = .systemMint
+        thumb.lineWidth = 2
+        thumb.position.y = -55
+        thumb.zPosition = 3
+        panel.addChild(thumb)
+        volumeThumb = thumb
+        volumeSliderFrame = CGRect(x: size.width / 2 - sliderWidth / 2,
+                                   y: size.height / 2 - 55 - 22, width: sliderWidth, height: 44)
+        updateVolumeSlider()
+        let back = addLabel("MAIN MENU", size: 16, y: (view?.safeAreaInsets.bottom ?? 0) + 35, to: overlay)
+        back.name = "menu"
+    }
+
+    private func updateVolumeSlider() {
+        let volume = CGFloat(MusicController.shared.volume)
+        volumeFill?.size.width = volumeSliderFrame.width * volume
+        volumeThumb?.position.x = -volumeSliderFrame.width / 2 + volumeSliderFrame.width * volume
+        volumeLabel?.text = "\(Int((volume * 100).rounded()))%"
+    }
+
+    private func dragVolume(to point: CGPoint, persist: Bool = false) {
+        guard volumeSliderFrame.width > 0 else { return }
+        let value = Float((point.x - volumeSliderFrame.minX) / volumeSliderFrame.width)
+        MusicController.shared.setVolume(value, persist: persist)
+        updateVolumeSlider()
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard state == .settings, let touch = volumeTouch, touches.contains(touch) else { return }
+        dragVolume(to: touch.location(in: self))
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = volumeTouch, touches.contains(touch) else { return }
+        if state == .settings { dragVolume(to: touch.location(in: self), persist: true) }
+        volumeTouch = nil
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = volumeTouch, touches.contains(touch) else { return }
+        MusicController.shared.setVolume(MusicController.shared.volume)
+        volumeTouch = nil
     }
 
     private func refreshAchievements() {
@@ -969,6 +1117,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
+        if state == .settings, volumeSliderFrame.insetBy(dx: -16, dy: 0).contains(touch.location(in: self)) {
+            guard volumeTouch == nil else { return }
+            volumeTouch = touch
+            dragVolume(to: touch.location(in: self))
+            return
+        }
+        if volumeTouch != nil { return }
         if state != .playing {
             // Walk ancestors so tapping a preview or label activates its entire row.
             let names = nodes(at: touch.location(in: self)).flatMap { node -> [String] in
@@ -1010,7 +1165,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 rebuild()
                 return
             }
-            if names.contains("achievements") {
+            if state == .settings, names.contains("toggleMusic") {
+                MusicController.shared.toggle()
+                showSettings()
+            } else if names.contains("settings") {
+                showSettings()
+            } else if names.contains("achievements") {
                 showAchievements()
             } else if names.contains("maps") {
                 showMaps()
@@ -1027,6 +1187,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 overlay.removeAllChildren()
                 hud.isHidden = false
                 state = .playing
+                MusicController.shared.play(.init(map: currentMap), restart: true)
                 player.physicsBody?.isDynamic = true
             }
             return

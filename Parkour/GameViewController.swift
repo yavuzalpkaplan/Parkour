@@ -43,6 +43,7 @@ class GameViewController: UIViewController {
               gameView.window?.windowScene?.activationState == .foregroundActive,
               gameView.bounds.width > 0, gameView.bounds.height > 0 else { return }
         gameView.isPaused = false
+        MusicController.shared.resume()
         if let scene = gameView.scene as? GameScene {
             scene.resumeAfterInterruption()
         } else if gameView.scene == nil {
@@ -55,6 +56,7 @@ class GameViewController: UIViewController {
     func pauseGame() {
         guard isViewLoaded, let gameView = view as? SKView else { return }
         gameView.isPaused = true
+        MusicController.shared.suspend()
     }
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {

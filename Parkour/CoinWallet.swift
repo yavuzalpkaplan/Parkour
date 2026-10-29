@@ -5,10 +5,14 @@ final class CoinWallet {
     private let defaults: UserDefaults
     private let balanceKey = "coinWallet.balance"
     private(set) var balance: Int
+    private(set) var lifetimeEarned: Int
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         balance = max(0, defaults.integer(forKey: balanceKey))
+        // Older versions only saved the balance; use it as the known starting total.
+        lifetimeEarned = max(balance, defaults.object(forKey: "coinWallet.lifetimeEarned") as? Int ?? balance)
+        defaults.set(lifetimeEarned, forKey: "coinWallet.lifetimeEarned")
     }
 
     @discardableResult
@@ -22,6 +26,8 @@ final class CoinWallet {
     func earn(_ amount: Int) {
         guard amount > 0 else { return }
         balance += amount
+        lifetimeEarned += amount
         defaults.set(balance, forKey: balanceKey)
+        defaults.set(lifetimeEarned, forKey: "coinWallet.lifetimeEarned")
     }
 }

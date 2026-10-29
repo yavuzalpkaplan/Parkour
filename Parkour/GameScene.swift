@@ -2,7 +2,7 @@ import SpriteKit
 import UIKit
 
 class GameScene: SKScene, SKPhysicsContactDelegate {
-    private enum State { case menu, maps, skins, playing, lost, won }
+    private enum State { case menu, maps, skins, achievements, playing, lost, won }
     private var state: State = .menu
     private let scenery = SKNode()
     private let course = SKNode()
@@ -12,6 +12,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let progressFill = SKSpriteNode(color: .systemMint, size: .zero)
     private let wallet = CoinWallet()
     private let skins = SkinStore()
+    private let achievements = AchievementStore()
+    private let notifications = SKNode()
+    private var achievementQueue: [AchievementUnlock] = []
+    private var showingAchievement = false
     private var pendingSkinPurchase: RunnerSkin?
     private let walletLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
     private var coinNodes: [SKNode] = []
@@ -63,6 +67,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         addChild(player)
         addChild(hud)
         addChild(overlay)
+        addChild(notifications)
+        notifications.zPosition = 200
+        // Reconcile previously saved purchases and completions without a burst of old popups.
+        achievements.refresh(wallet: wallet, skins: skins, maps: mapProgress)
         scenery.zPosition = -10
         hud.zPosition = 20
         overlay.zPosition = 30
@@ -460,6 +468,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             // Credit each pickup once; restarting never credits the run a second time.
             wallet.earn(earned)
             updateCoinLabel()
+            refreshAchievements()
         }
     }
 
@@ -540,10 +549,165 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             overlay.addChild(mapsButton)
             let mapLabel = addLabel("MAPS", size: 16, y: -6, to: mapsButton)
             mapLabel.position.x = 0
+            let achievementButton = SKShapeNode(circleOfRadius: 28)
+            achievementButton.name = "achievements"
+            achievementButton.fillColor = SKColor(red: 0.12, green: 0.17, blue: 0.25, alpha: 1)
+            achievementButton.strokeColor = .systemYellow.withAlphaComponent(0.6)
+            achievementButton.lineWidth = 1.5
+            achievementButton.position = CGPoint(x: size.width - (view?.safeAreaInsets.right ?? 0) - 48,
+                                                y: (view?.safeAreaInsets.bottom ?? 0) + 48)
+            overlay.addChild(achievementButton)
+            achievementButton.addChild(achievementMedal())
         } else {
             let menu = addLabel("MAIN MENU", size: 15, y: centerY - 90, to: overlay)
             menu.name = "menu"
         }
+    }
+
+    private func refreshAchievements() {
+        achievementQueue.append(contentsOf: achievements.refresh(wallet: wallet, skins: skins, maps: mapProgress,
+                                                                 runCoins: collectedCoins))
+        showNextAchievement()
+    }
+
+    private func showNextAchievement() {
+        guard !showingAchievement, !achievementQueue.isEmpty else { return }
+        showingAchievement = true
+        let achievement = achievementQueue.removeFirst()
+        let width = min(310, size.width - 40)
+        let banner = SKShapeNode(rectOf: CGSize(width: width, height: 62), cornerRadius: 14)
+        banner.fillColor = SKColor(red: 0.10, green: 0.16, blue: 0.22, alpha: 1)
+        banner.strokeColor = .systemYellow
+        // Keep notifications below the progress and coin HUD.
+        banner.position = CGPoint(x: size.width / 2, y: size.height - safeTop - 125)
+        banner.alpha = 0
+        notifications.addChild(banner)
+        let heading = addLabel("ACHIEVEMENT UNLOCKED", size: 10, y: 10, to: banner)
+        heading.position.x = 0
+        heading.fontColor = .systemYellow
+        let title = addLabel(achievement.title, size: 16, y: -13, to: banner)
+        title.position.x = 0
+        banner.run(.sequence([.fadeIn(withDuration: 0.15), .wait(forDuration: 2),
+                              .fadeOut(withDuration: 0.2), .run { [weak self, weak banner] in
+            banner?.removeFromParent()
+            self?.showingAchievement = false
+            self?.showNextAchievement()
+        }]))
+    }
+
+    private func showAchievements() {
+        state = .achievements
+        overlay.removeAllChildren()
+        hud.isHidden = true
+        let shade = SKSpriteNode(color: .black.withAlphaComponent(0.85), size: size)
+        shade.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        overlay.addChild(shade)
+        let top = size.height - safeTop - 55
+        addLabel("ACHIEVEMENTS", size: 24, y: top, to: overlay)
+        let wide = size.width > size.height
+        let columns = wide ? 2 : 1
+        let rows = Int(ceil(Double(AchievementID.allCases.count) / Double(columns)))
+        let spacing = min(108, (top - 100) / CGFloat(rows))
+        let cardWidth = min(360, (size.width - CGFloat(columns + 1) * 20) / CGFloat(columns))
+        let gridWidth = CGFloat(columns) * cardWidth + CGFloat(columns - 1) * 20
+        for (index, id) in AchievementID.allCases.enumerated() {
+            let stages = achievements.completedStages(for: id)
+            let complete = stages == id.targets.count
+            let value = achievements.value(for: id, wallet: wallet, skins: skins, maps: mapProgress)
+            let target = id.targets[min(stages, id.targets.count - 1)]
+            let card = SKShapeNode(rectOf: CGSize(width: cardWidth, height: spacing - 8), cornerRadius: 12)
+            card.position = CGPoint(x: (size.width - gridWidth) / 2 + cardWidth / 2 + CGFloat(index % columns) * (cardWidth + 20),
+                                    y: top - 22 - spacing * (CGFloat(index / columns) + 0.5))
+            card.fillColor = .white.withAlphaComponent(0.07)
+            card.strokeColor = complete ? .systemMint : .white.withAlphaComponent(0.12)
+            overlay.addChild(card)
+            let title = addLabel(id.title, size: wide ? 14 : 18, y: wide ? 12 : 24, to: card)
+            title.position.x = 0
+            title.fontColor = complete ? .systemMint : .white
+            if id.targets.count == 3 {
+                title.horizontalAlignmentMode = .left
+                title.position.x = -cardWidth / 2 + 18
+                let gap: CGFloat = wide ? 18 : 23
+                let radius: CGFloat = wide ? 7 : 9
+                let right = cardWidth / 2 - 22
+                for index in 0..<3 {
+                    let star = achievementStar(earned: index < stages, radius: radius)
+                    star.position = CGPoint(x: right - CGFloat(2 - index) * gap, y: title.position.y + 6)
+                    card.addChild(star)
+                }
+            }
+            let detail = addLabel(id.detail(target: target), size: wide ? 10 : 11, y: wide ? -2 : 4, to: card)
+            detail.position.x = 0
+            let statusText = complete ? "COMPLETED" : "\(min(value, target)) / \(target)"
+            let status = addLabel(statusText, size: wide ? 10 : 11, y: wide ? -15 : -17, to: card)
+            status.position.x = 0
+            status.fontColor = .systemYellow
+            let barWidth = cardWidth - 36
+            let track = SKSpriteNode(color: .white.withAlphaComponent(0.15), size: CGSize(width: barWidth, height: 3))
+            track.position.y = wide ? -24 : -33
+            card.addChild(track)
+            let fill = SKSpriteNode(color: complete ? .systemMint : .systemYellow,
+                                    size: CGSize(width: barWidth * min(1, CGFloat(value) / CGFloat(target)), height: 3))
+            fill.anchorPoint = CGPoint(x: 0, y: 0.5)
+            fill.position = CGPoint(x: -barWidth / 2, y: track.position.y)
+            card.addChild(fill)
+        }
+        let back = addLabel("MAIN MENU", size: 16, y: (view?.safeAreaInsets.bottom ?? 0) + 25, to: overlay)
+        back.name = "menu"
+    }
+
+    private func achievementMedal() -> SKNode {
+        let icon = SKNode()
+        // Explicit depth keeps every part above the button when sibling order is ignored.
+        icon.zPosition = 1
+        let ribbonPath = CGMutablePath()
+        ribbonPath.move(to: CGPoint(x: -12, y: 16))
+        ribbonPath.addLine(to: CGPoint(x: -3, y: 16))
+        ribbonPath.addLine(to: CGPoint(x: 4, y: 0))
+        ribbonPath.addLine(to: CGPoint(x: -4, y: -4))
+        ribbonPath.closeSubpath()
+        ribbonPath.move(to: CGPoint(x: 3, y: 16))
+        ribbonPath.addLine(to: CGPoint(x: 12, y: 16))
+        ribbonPath.addLine(to: CGPoint(x: 4, y: -4))
+        ribbonPath.addLine(to: CGPoint(x: -4, y: 0))
+        ribbonPath.closeSubpath()
+        let ribbons = SKShapeNode(path: ribbonPath)
+        ribbons.fillColor = SKColor(red: 0.86, green: 0.53, blue: 0.08, alpha: 1)
+        ribbons.strokeColor = SKColor(red: 1, green: 0.81, blue: 0.30, alpha: 1)
+        ribbons.lineWidth = 1
+        icon.addChild(ribbons)
+
+        let medal = SKShapeNode(circleOfRadius: 11)
+        medal.position.y = -5
+        medal.zPosition = 1
+        medal.fillColor = SKColor(red: 1, green: 0.76, blue: 0.12, alpha: 1)
+        medal.strokeColor = SKColor(red: 1, green: 0.91, blue: 0.53, alpha: 1)
+        medal.lineWidth = 2
+        icon.addChild(medal)
+        let star = achievementStar(earned: true, radius: 6.5)
+        star.zPosition = 1
+        star.fillColor = SKColor(red: 0.67, green: 0.36, blue: 0.03, alpha: 1)
+        star.strokeColor = .clear
+        medal.addChild(star)
+        return icon
+    }
+
+    private func achievementStar(earned: Bool, radius: CGFloat) -> SKShapeNode {
+        let path = CGMutablePath()
+        for point in 0..<10 {
+            let angle = CGFloat.pi / 2 + CGFloat(point) * .pi / 5
+            let length = point.isMultiple(of: 2) ? radius : radius * 0.45
+            let position = CGPoint(x: cos(angle) * length, y: sin(angle) * length)
+            if point == 0 { path.move(to: position) } else { path.addLine(to: position) }
+        }
+        path.closeSubpath()
+        let star = SKShapeNode(path: path)
+        star.fillColor = earned ? SKColor(red: 1, green: 0.77, blue: 0.16, alpha: 1)
+            : SKColor(red: 0.22, green: 0.25, blue: 0.30, alpha: 1)
+        star.strokeColor = earned ? SKColor(red: 1, green: 0.91, blue: 0.53, alpha: 1)
+            : SKColor(red: 0.38, green: 0.41, blue: 0.46, alpha: 1)
+        star.lineWidth = 1
+        return star
     }
 
     private func showMaps() {
@@ -702,6 +866,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                     player.color = skinColor(skins.selected)
                     updateCoinLabel()
                     showSkins(message: success ? "Purchased and equipped" : "Not enough coins")
+                    if success { refreshAchievements() }
                 }
                 return
             }
@@ -722,7 +887,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 rebuild()
                 return
             }
-            if names.contains("maps") {
+            if names.contains("achievements") {
+                showAchievements()
+            } else if names.contains("maps") {
                 showMaps()
             } else if names.contains("skins") {
                 showSkins()
@@ -864,6 +1031,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func endRound(won: Bool) {
         mapProgress.record(won ? 100 : Int(min(1, distance / finishDistance) * 100), for: currentMap)
+        refreshAchievements()
         state = won ? .won : .lost
         player.physicsBody?.velocity = .zero
         player.physicsBody?.isDynamic = false

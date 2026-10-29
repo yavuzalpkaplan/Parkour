@@ -1,7 +1,7 @@
 import SpriteKit
 
 class GameScene: SKScene, SKPhysicsContactDelegate {
-    private enum State { case menu, playing, lost, won }
+    private enum State { case menu, skins, playing, lost, won }
     private var state: State = .menu
     private let scenery = SKNode()
     private let course = SKNode()
@@ -10,6 +10,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private let player = SKSpriteNode(color: .systemOrange, size: CGSize(width: 36, height: 36))
     private let progressFill = SKSpriteNode(color: .systemMint, size: .zero)
     private let wallet = CoinWallet()
+    private let skins = SkinStore()
+    private var pendingSkinPurchase: RunnerSkin?
     private let walletLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
     private var coinNodes: [SKNode] = []
     private var movingHazards: [SKNode] = []
@@ -63,6 +65,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
 
     private func configurePlayer() {
+        player.color = skinColor(skins.selected)
         player.physicsBody = SKPhysicsBody(rectangleOf: player.size)
         player.physicsBody?.allowsRotation = false
         player.physicsBody?.restitution = 0
@@ -79,6 +82,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func rebuild() {
         distance = 0
+        pendingSkinPurchase = nil
         course.removeAllChildren()
         scenery.removeAllChildren()
         hud.removeAllChildren()
@@ -420,10 +424,113 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         text.fontColor = .black
         text.name = "start"
         if state == .menu {
-            addLabel("MAP · Soon     SKINS · Soon", size: 13, y: centerY - 90, to: overlay)
+            let skinsButton = SKShapeNode(rectOf: CGSize(width: 210, height: 44), cornerRadius: 14)
+            skinsButton.name = "skins"
+            skinsButton.fillColor = .white.withAlphaComponent(0.12)
+            skinsButton.strokeColor = .clear
+            skinsButton.position = CGPoint(x: size.width / 2, y: centerY - 90)
+            overlay.addChild(skinsButton)
+            let label = addLabel("SKINS", size: 16, y: -6, to: skinsButton)
+            label.position.x = 0
+            label.name = "skins"
+            addLabel("MAP · Soon", size: 13, y: centerY - 140, to: overlay)
         } else {
             let menu = addLabel("MAIN MENU", size: 15, y: centerY - 90, to: overlay)
             menu.name = "menu"
+        }
+    }
+
+    private func skinColor(_ skin: RunnerSkin) -> SKColor {
+        switch skin {
+        case .orange: return .systemOrange
+        case .mint: return .systemMint
+        case .blue: return .systemBlue
+        case .violet: return .systemPurple
+        case .rose: return .systemPink
+        }
+    }
+
+    private func showSkins(message: String? = nil) {
+        state = .skins
+        pendingSkinPurchase = nil
+        overlay.removeAllChildren()
+        hud.isHidden = true
+        let shade = SKSpriteNode(color: .black.withAlphaComponent(0.8), size: size)
+        shade.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        overlay.addChild(shade)
+        let balance = addLabel("COINS  \(wallet.balance)", size: 15, y: size.height - safeTop - 40, to: overlay)
+        balance.position.x = 28
+        balance.horizontalAlignmentMode = .left
+        balance.fontColor = .systemYellow
+
+        // Keep the shop compact enough for both portrait and landscape screens.
+        let top = size.height - safeTop - 85
+        addLabel("SKINS", size: 28, y: top, to: overlay)
+        let spacing = min(78, (top - 85) / CGFloat(RunnerSkin.allCases.count))
+        let rowWidth = min(330, size.width - 48)
+        for (index, skin) in RunnerSkin.allCases.enumerated() {
+            let row = SKShapeNode(rectOf: CGSize(width: rowWidth, height: spacing - 6), cornerRadius: 12)
+            row.position = CGPoint(x: size.width / 2, y: top - 25 - spacing * (CGFloat(index) + 0.5))
+            row.name = "skin:\(skin.rawValue)"
+            row.fillColor = .white.withAlphaComponent(0.08)
+            row.strokeColor = skins.selected == skin ? .systemMint : .clear
+            overlay.addChild(row)
+            let preview = SKSpriteNode(color: skinColor(skin), size: CGSize(width: 28, height: 28))
+            preview.position.x = -rowWidth / 2 + 28
+            row.addChild(preview)
+            let title = addLabel(skin.title, size: 15, y: -5, to: row)
+            title.horizontalAlignmentMode = .left
+            title.position.x = -rowWidth / 2 + 52
+            let action = skins.selected == skin ? "EQUIPPED" : skins.owns(skin) ? "EQUIP" : "BUY · \(skin.price)"
+            let label = addLabel(action, size: 13, y: -5, to: row)
+            label.horizontalAlignmentMode = .right
+            label.position.x = rowWidth / 2 - 14
+            label.fontColor = skins.selected == skin ? .systemMint : .systemYellow
+        }
+        let back = addLabel("MAIN MENU", size: 16, y: 35, to: overlay)
+        back.name = "menu"
+        if let message {
+            let note = addLabel(message, size: 13, y: 64, to: overlay)
+            note.fontColor = .systemYellow
+        }
+    }
+
+    private func showPurchaseConfirmation(for skin: RunnerSkin) {
+        pendingSkinPurchase = skin
+        let dialog = SKNode()
+        dialog.name = "purchaseDialog"
+        dialog.zPosition = 100
+        overlay.addChild(dialog)
+        let dim = SKSpriteNode(color: .black.withAlphaComponent(0.7), size: size)
+        dim.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        dialog.addChild(dim)
+
+        let panel = SKShapeNode(rectOf: CGSize(width: min(330, size.width - 32), height: 260), cornerRadius: 22)
+        panel.fillColor = SKColor(red: 0.12, green: 0.16, blue: 0.25, alpha: 1)
+        panel.strokeColor = .white.withAlphaComponent(0.2)
+        panel.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        dialog.addChild(panel)
+        let title = addLabel("Buy \(skin.title)?", size: 24, y: 85, to: panel)
+        title.position.x = 0
+        let preview = SKSpriteNode(color: skinColor(skin), size: CGSize(width: 38, height: 38))
+        preview.position.y = 44
+        panel.addChild(preview)
+        let price = addLabel("1,000 COINS", size: 18, y: 2, to: panel)
+        price.position.x = 0
+        price.fontColor = .systemYellow
+        let affordable = wallet.balance >= skin.price
+        let note = addLabel(affordable ? "Balance: \(wallet.balance) coins" : "Not enough coins · Balance: \(wallet.balance)", size: 12, y: -25, to: panel)
+        note.position.x = 0
+
+        for (name, text, x) in [("cancelPurchase", "CANCEL", CGFloat(-73)), ("confirmPurchase", "BUY", CGFloat(73))] {
+            let button = SKShapeNode(rectOf: CGSize(width: 132, height: 46), cornerRadius: 12)
+            button.name = name
+            button.position = CGPoint(x: x, y: -79)
+            button.fillColor = name == "confirmPurchase" ? (affordable ? .systemMint : .darkGray) : .gray
+            button.strokeColor = .clear
+            panel.addChild(button)
+            let label = addLabel(text, size: 15, y: -5, to: button)
+            label.position.x = 0
         }
     }
 
@@ -440,8 +547,42 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
         if state != .playing {
-            let names = nodes(at: touch.location(in: self)).compactMap(\.name)
-            if names.contains("menu") {
+            // Walk ancestors so tapping a preview or label activates its entire row.
+            let names = nodes(at: touch.location(in: self)).flatMap { node -> [String] in
+                var names: [String] = []
+                var current: SKNode? = node
+                while let item = current {
+                    if let name = item.name { names.append(name) }
+                    current = item.parent
+                }
+                return names
+            }
+            // A modal consumes all touches, including taps on the dimmed shop behind it.
+            if let skin = pendingSkinPurchase {
+                if names.contains("cancelPurchase") {
+                    showSkins()
+                } else if names.contains("confirmPurchase"), wallet.balance >= skin.price {
+                    let success = skins.selectOrBuy(skin, wallet: wallet)
+                    player.color = skinColor(skins.selected)
+                    updateCoinLabel()
+                    showSkins(message: success ? "Purchased and equipped" : "Not enough coins")
+                }
+                return
+            }
+            if state == .skins, let name = names.first(where: { $0.hasPrefix("skin:") }),
+               let skin = RunnerSkin(rawValue: String(name.dropFirst(5))) {
+                if skins.owns(skin) {
+                    skins.selectOrBuy(skin, wallet: wallet)
+                    player.color = skinColor(skins.selected)
+                    showSkins()
+                } else {
+                    showPurchaseConfirmation(for: skin)
+                }
+                return
+            }
+            if names.contains("skins") {
+                showSkins()
+            } else if names.contains("menu") {
                 state = .menu
                 rebuild()
             } else if names.contains("start") {

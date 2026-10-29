@@ -11,6 +11,14 @@ final class CoinWallet {
         balance = max(0, defaults.integer(forKey: balanceKey))
     }
 
+    @discardableResult
+    func spend(_ amount: Int) -> Bool {
+        guard amount > 0, balance >= amount else { return false }
+        balance -= amount
+        defaults.set(balance, forKey: balanceKey)
+        return true
+    }
+
     func earn(_ amount: Int) {
         guard amount > 0 else { return }
         balance += amount

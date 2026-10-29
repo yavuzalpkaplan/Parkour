@@ -20,6 +20,9 @@ class GameViewController: UIViewController {
         scene.scaleMode = .resizeFill
         view.presentScene(scene)
 
+        // Match the iPhone 15 display cadence for consistent scrolling.
+        view.preferredFramesPerSecond = 60
+        view.shouldCullNonVisibleNodes = true
         view.ignoresSiblingOrder = true
         view.showsFPS = false
         view.showsNodeCount = false
